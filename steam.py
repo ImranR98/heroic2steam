@@ -14,7 +14,21 @@ from pathlib import Path
 from urllib.parse import quote
 
 STEAM_DIR = Path(os.environ.get("STEAM_DIR", Path.home() / ".local/share/Steam"))
-APP_DIR = Path.home() / ".local/share/applications/steam-add-nonsteam-game"
+
+
+def _launcher_dir() -> Path:
+    override = os.environ.get("HEROIC2STEAM_LAUNCHER_DIR")
+    if override:
+        return Path(override).expanduser()
+    data_home = os.environ.get("XDG_DATA_HOME")
+    base = Path(data_home).expanduser() if data_home else Path.home() / ".local/share"
+    return base / "heroic2steam" / "launchers"
+
+
+APP_DIR = _launcher_dir()
+# Older versions kept launchers in the XDG applications dir, where desktop
+# menu scanners could pick them up. Still recognized for migration/removal.
+LEGACY_APP_DIR = Path.home() / ".local/share/applications/steam-add-nonsteam-game"
 SENTINEL = Path(tempfile.gettempdir()) / "addnonsteamgamefile"
 
 log = print
@@ -125,21 +139,65 @@ def find_appids(title=None, path=None) -> list[int]:
             if f.get("appid") and _matches(f, title, path)]
 
 
+def _under(value: str, root: Path) -> bool:
+    value = value.strip('"')
+    root_s = str(root)
+    return value == root_s or value.startswith(root_s + os.sep)
+
+
+def _entry_slug(fields: dict) -> str:
+    raw = fields.get("ShortcutPath") or fields.get("Exe", "")
+    return os.path.basename(raw.strip('"')).rsplit(".", 1)[0]
+
+
 def in_app_dir(fields: dict) -> bool:
-    sp = fields.get("ShortcutPath", "")
-    exe = fields.get("Exe", "").strip('"')
-    return sp.startswith(str(APP_DIR)) or exe.startswith(str(APP_DIR))
+    paths = (fields.get("ShortcutPath", ""), fields.get("Exe", ""))
+    return any(_under(p, d) for p in paths for d in (APP_DIR, LEGACY_APP_DIR))
+
+
+def in_legacy_dir(fields: dict) -> bool:
+    paths = (fields.get("ShortcutPath", ""), fields.get("Exe", ""))
+    return any(_under(p, LEGACY_APP_DIR) for p in paths)
 
 
 def imported_entries() -> list[tuple[str, int | None, str]]:
     """(slug, appid, title) of shortcuts referencing launcher files."""
     return [
-        (os.path.basename(f.get("ShortcutPath") or f.get("Exe", "")).rsplit(".", 1)[0],
-         f.get("appid"), f.get("AppName", ""))
+        (_entry_slug(f), f.get("appid"), f.get("AppName", ""))
         for vdf in vdf_paths()
         for f, *_ in read_entries(vdf)
         if in_app_dir(f)
     ]
+
+
+def legacy_launcher_slugs() -> set[str]:
+    """Slugs of shortcuts still pointing at the old applications-dir launchers."""
+    return {
+        _entry_slug(f)
+        for vdf in vdf_paths()
+        for f, *_ in read_entries(vdf)
+        if in_legacy_dir(f)
+    }
+
+
+def migrate_launcher_paths() -> set[str]:
+    """Repoint shortcuts from LEGACY_APP_DIR to APP_DIR; returns migrated slugs.
+    Steam must be closed while shortcuts.vdf is edited."""
+    old = str(LEGACY_APP_DIR).encode()
+    new = str(APP_DIR).encode()
+    migrated: set[str] = set()
+    for vdf in vdf_paths():
+        def fn(fields, start, raw):
+            if not in_legacy_dir(fields):
+                return raw
+            slug = _entry_slug(fields)
+            if not slug or not (APP_DIR / f"{slug}.sh").is_file():
+                return raw  # no replacement launcher: leave the working one alone
+            migrated.add(slug)
+            return raw.replace(old, new), True
+
+        edit_entries(vdf, fn)
+    return migrated
 
 
 def all_titles() -> set[str]:

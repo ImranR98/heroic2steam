@@ -7,25 +7,26 @@ Import Heroic Games Launcher **sideload** (non-Steam) games into Steam on Linux,
 For each game it finds in Heroic's sideload library:
 
 1. Reads the game's `GamesConfig/<app>.json` for the wine/Proton binary and prefix.
-2. Writes a small launcher pair into `~/.local/share/applications/steam-add-nonsteam-game/`:
+2. Writes a small launcher pair into `~/.local/share/heroic2steam/launchers/`:
    - `<slug>.sh` – bash wrapper exporting `STEAM_COMPAT_DATA_PATH` (prefix) and `STEAM_COMPAT_CLIENT_INSTALL_PATH`, then `exec`s `proton run <exe>`.
-   - `<slug>.desktop` – `NoDisplay` desktop entry pointing at the wrapper.
+   - `<slug>.desktop` – a desktop entry pointing at the wrapper. It lives outside `~/.local/share/applications/`, so it does not appear in desktop menus.
 3. Starts Steam if needed and opens `steam://addnonsteamgame/<desktop>`.
 4. Watches the binary `shortcuts.vdf` (under each `userdata/*/config/`) for the new entry, reads back its `appid`, and writes grid art as `grid/<appid>_*` images sourced from Heroic icons, cached covers, and icons embedded in the game's `.exe`.
 
-`shortcuts.vdf` is edited directly (with a `.bak` backup) when removing games — Steam must be **closed** for that.
+`shortcuts.vdf` is edited directly (with a `.bak` backup) when removing games or migrating old launcher paths — Steam must be **closed** for that.
 
 ## Usage
 
 ```
-python3 main.py [add] TITLE...|all [--dry-run]
+python3 main.py [add] TITLE...|all [--dry-run] [--regen]
 python3 main.py remove TITLE...
-python3 main.py sync [--dry-run]
+python3 main.py sync [--dry-run] [--regen]
 ```
 
 - **add** (default): `all` imports every installed sideload game; otherwise partial matches on the title are imported. `--dry-run`/`-n` only reports what would happen.
 - **remove**: removes the launcher, the Steam shortcut(s), and their grid art. Steam must be closed.
-- **sync**: adds games not yet in Steam (skipping games hidden in the Heroic library), removes imported shortcuts that no longer exist in Heroic, and — when run with Steam closed — fills each shortcut's `icon` field so Steam actually displays the icons. Steam shows shortcut icons only via that field, so run sync once with Steam closed after importing for icons to appear.
+- **sync**: adds games not yet in Steam (skipping games hidden in the Heroic library), removes imported shortcuts that no longer exist in Heroic, and — when run with Steam closed — fills each shortcut's `icon` field so Steam actually displays the icons and migrates shortcuts away from the old applications-dir launchers. Steam shows shortcut icons only via that field, so run sync once with Steam closed after importing for icons to appear.
+- **`--regen`** (`--force`/`-f`): rewrites each already-imported game's launcher `.sh`/`.desktop` pair instead of skipping it, and reinstalls any missing grid art. Use this if the launcher files were deleted or a game's Proton/prefix config changed. With `sync`, it applies to every game already imported by the tool; with `add`, it applies to the selected titles.
 
 ## Configuration
 
@@ -33,8 +34,11 @@ python3 main.py sync [--dry-run]
 |---|---|
 | `HEROIC_CONFIG` | `~/.var/app/com.heroicgameslauncher.hgl/config/heroic` (flatpak) |
 | `STEAM_DIR` | `~/.local/share/Steam` |
+| `HEROIC2STEAM_LAUNCHER_DIR` | `$XDG_DATA_HOME/heroic2steam/launchers` (`~/.local/share/heroic2steam/launchers`) |
 
-Other paths used: `sideload_apps/library.json`, `GamesConfig/`, `icons/`, `images-cache/` under `HEROIC_CONFIG`; launchers in `~/.local/share/applications/steam-add-nonsteam-game/`.
+Other paths used: `sideload_apps/library.json`, `GamesConfig/`, `icons/`, `images-cache/` under `HEROIC_CONFIG`; launchers in `~/.local/share/heroic2steam/launchers/` (or `HEROIC2STEAM_LAUNCHER_DIR`).
+
+Launchers used to live in `~/.local/share/applications/steam-add-nonsteam-game/`. Running `sync` once with Steam closed migrates existing shortcuts to the new location, updates their paths in `shortcuts.vdf`, and deletes the old files.
 
 Requires Python 3.10+. Pillow (`pip install pillow`) is optional but needed for grid art.
 
